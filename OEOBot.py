@@ -1,201 +1,224 @@
-import threading
+#!/bin/env python3
+
 import time
-import os
-import random
+import datetime
 import json
-import discord
+import threading
+import enum
 import socket
-from datetime import datetime
-from dotenv import load_dotenv
-from nested_lookup import nested_lookup
-#from discord.ext.commands import Bot
-load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
-client = discord.Client()
-UDP_IP = "127.0.0.1"
-UDP_PORT = 8095
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind((UDP_IP, UDP_PORT))
-heartbeatTimeout = 120
-heart_dict = 0
-missionInfo_dict = 0
-playerInfoSt_dict = 0
-playerInfoCont_dict = 0
-playersOnline = 0
-slotInfoSt_dict = 0
-slotInfoCont_dict = 0
-servState = 0
-lastHeartbeat = 0
-endTime = 2600
+import configparser
+from discord.ext import commands
 
-def toGo():
-    timeRaw = heart_dict.get('time')
-    ServHour = timeRaw.get('hour')
-    hourInS = ServHour * 3600
-    ServMin =  timeRaw.get('min')
-    minInS = ServMin * 60
-    serverTimeS = hourInS+minInS               
-    if(ServHour < 200):
-        serverTimeS = serverTimeS + 24*3600  
-    endTimeinS = 26 * 3600
-    return conversion(endTimeinS - serverTimeS)
- 
-def conversion(sec):
-   sec_value = sec % (24 * 3600)
-   hour_value = sec_value // 3600
-   sec_value %= 3600
-   mins = sec_value // 60
-   sec_value %= 60
-   strRetunrn ="{} hrs and {} mins.".format(hour_value, mins)
-   return strRetunrn
+class DCSMsgType(enum.Enum):
+    HEARTBEAT       = 1
+    MISSIONINFO     = 2
+    PLAYERINFOSTART = 3
+    PLAYERINFOCONT  = 4
+    SLOTINFOSTART   = 5
+    SLOTINFOCONT    = 6
+    STATE           = 7
 
-def getMisTime():
-    timeRaw = heart_dict.get('time')
-    ServHour = timeRaw.get('hour')
-    hourInS = ServHour * 3600
-    ServMin =  timeRaw.get('min')
-    return "{:02d}:{:02d}".format(ServHour, ServMin)
+class DCSServerState(enum.Enum):
+    UNKNOWN = 0
+    STARTED = 1
+    STOPPED = 2
+    PAUSED  = 3
 
-def checkType(recvMessage_dict):
-    global heart_dict, missionInfo_dict, playerInfoSt_dict, playerInfoCont_dict, slotInfoSt_dict, slotInfoCont_dict, servState, lastHeartbeat, playersOnline
-    type = recvMessage_dict.get("type")
-    print('Message type: {}'.format(type))
-    if type == 1:
-        heart_dict = recvMessage_dict.get("data", "Please wait for this information to be intialised and try again soon")
-        lastHeartbeat = time.time()
-    elif type == 2:
-        missionInfo_dict = recvMessage_dict.get("data", "Please wait for this information to be intialised and try again soon")
-    elif type == 3:
-        playerInfoSt_dict = recvMessage_dict.get("data", "Please wait for this information to be intialised and try again soon")
-        player_dict = playerInfoSt_dict.get('players')
-        playerList = nested_lookup('name', player_dict)
-        playersOnline = playerList
-        #bot.change_presence(game.discord.Game(name='P = {}/60, Status: = {}'.format(playersOnline, servState)))
+class MissionInfo:
+    def __init__(self, msninfo):
+        self.theater        = msninfo['theater']
+        self.name           = msninfo['mission']
+        self.filename       = msninfo['filename']
+        self.description    = msninfo['description']
+        self.restart_period = msninfo['restart_period']
+        self.local_time     = None
+        self.time_left      = None
+        self.slots          = dict()
 
-    elif type == 4:
-        playerInfoCont_dict = recvMessage_dict.get("data" , "Please wait for this information to be intialised and try again soon")
-    elif type == 5:
-        slotInfoSt_dict = recvMessage_dict.get("data", "Please wait for this information to be intialised and try again soon")
-    elif type == 6:
-        slotInfoCont_dict = recvMessage_dict.get("data", "Please wait for this information to be intialised and try again soon")
-    elif type == 7:
-        numState = recvMessage_dict.get("data", "Please wait for this information to be intialised and try again soon")
-        if numState == 1:
-            servState = "Running"
-        elif numState == 2:
-            servState = "Stopped"
-        elif numState == 3:
-            servState = "Paused"
+    def updateTimes(self, times):
+        self.local_time = (
+            times['time']['year'],
+            times['time']['month'],
+            times['time']['day'],
+            times['time']['hour'],
+            times['time']['min'],
+            times['time']['sec'],
+            times['time']['wday'],
+            times['time']['yday'],
+            0)
+        self.time_left = times['time_left']
 
-def checkTime():
-    if 'heart_dict' in globals() and type(heart_dict) is dict:
-        info = "```Time: {} local.\nThe server will restart in {} ```".format(getMisTime(), toGo())
-    else:
-        info = "Please wait for this information to be intialised and try again soon"
-    return info
+    def addSlot(self, slot):
+        self.slots[str(slot['unitId'])] = slot
 
-def checkStatus():
-    if 'servState' in globals():
-        info = "OEO is currently: {}".format(servState)
-    else:
-        info = "Please wait for this information to be intialised and try again soon"
-    HBDiffTime = time.time() - lastHeartbeat
-    if HBDiffTime > heartbeatTimeout:
-        info = "Server might not be running, contact an admin"
-    return info
+class Players:
+    def __init__(self, players):
+        self.players = dict()
+        for key, player in players.items():
+            self.players[player['ucid']] = player
 
-def checkPlayers():
-    if 'playerInfoSt_dict' in globals() and type(playerInfoSt_dict) is dict:
-        info = 'Players currently online: {}/60'.format(len(playersOnline))
-    else:
-        info = "Please wait for this information to be intialised and try again soon"
-    return info
+    def __len__(self):
+        return len(self.players)
 
-def gen_dict_extract(key, var):
-    if hasattr(var,'iteritems'):
-        for k, v in var.iteritems():
-            if k == key:
-                yield v
-            if isinstance(v, dict):
-                for result in gen_dict_extract(key, v):
-                    yield result
-            elif isinstance(v, list):
-                for d in v:
-                    for result in gen_dict_extract(key, d):
-                        yield result
+    def update(self, player):
+        self.players[player['ucid']] = player
 
-def checkRestart():
-    if 'heart_dict' in globals() and type(heart_dict) is dict:
-        info = " ```The server will restart in {} ```".toGo())
-    else:
-        info = "Please wait for this information to be intialised and try again soon"
-    return info
+class DCSServer:
+    def __init__(self, uid):
+        self.uid       = uid
+        self.status    = DCSServerState.UNKNOWN
+        self.players   = None
+        self.mission   = None
+        self.last_hb   = None
 
-def checkInfo():
-    if 'missionInfo_dict' in globals() and type(missionInfo_dict) is dict:
-        theater = missionInfo_dict.get('theater')
-        mission = missionInfo_dict.get('mission')
-        if type('heart_dict') is dict:
-            time = getMisTime()
-            restart = toGo()
-        else:  
-            time = "Please wait for this information to be intialised and try again soon"   
-            restart = "Please wait for this information to be intialised and try again soon"
-        info = "Server: Operation Enduring Oddysey\nMission: {}\nTheater: {}\nLocal Time: {}\nRestart: {}".format(mission, theater, time, restart)
-    else:
-        info = "Please wait for this information to be initialised and try again soon"
-    if info:
-            await message.channel.send(info)
+    def rcvMsg(self, msg):
+        if DCSMsgType.HEARTBEAT.value == msg['type']:
+            self.last_hb = time.time()
+            if self.mission is None:
+                return
+            self.mission.updateTimes(msg['data'])
+        elif DCSMsgType.MISSIONINFO.value == msg['type']:
+            self.mission = MissionInfo(msg['data'])
+        elif DCSMsgType.PLAYERINFOSTART.value == msg['type']:
+            if not bool(msg['data']['eom']):
+                return
+            self.players = Players(msg['data']['players'])
+        elif DCSMsgType.PLAYERINFOCONT.value == msg['type']:
+            pass
+            # not supported, look at changing the protocol to
+            # where each slot and player are sent in individual
+            # messages
+        elif DCSMsgType.SLOTINFOSTART.value == msg['type']:
+            if not bool(msg['data']['eom']) or self.mission is None:
+                return
+            for key, slot in msg['data']['slots'].items():
+                self.mission.addSlot(slot)
+        elif DCSMsgType.SLOTINFOCONT.value == msg['type']:
+            pass
+        elif DCSMsgType.STATE.value == msg['type']:
+            if msg['data'] == DCSServerState.STARTED.value:
+                self.status = DCSServerState.STARTED
+            elif msg['data'] == DCSServerState.STOPPED.value:
+                self.status = DCSServerState.STOPPED
+            elif msg['data'] == DCSServerState.PAUSED.value:
+                self.status = DCSServerState.PAUSED
+        else:
+            pass
 
-def thread_recieve():
-    while True:
-        dataUDP, addr = sock.recvfrom(2**16)
-        recvMessage_dict = json.loads(dataUDP)
-        if "recvMessage_dict" in locals():
-            checkType(recvMessage_dict)
+class DCSServerDB:
+    def __init__(self):
+        self.lock    = threading.Lock()
+        self.default = None
+        self.servers = dict()
+    def __getitem__(self, key):
+        return self.servers[key]
+    def __contains__(self, key):
+        return (key in self.servers)
+    def keys(self):
+        return self.servers.keys()
+    def rcvMsg(self, msg):
+        with self.lock:
+            data = json.loads(msg)
+            if data['id'] in self.servers:
+                server = self.servers[data['id']]
+            else:
+                server = DCSServer(data['id'])
+                self.servers[data['id']] = server
 
-def thread_message():
-    @client.event
-    async def on_message(message):
-        if message.author == client.user:
+            if self.default is None:
+                self.default = server.uid
+            server.rcvMsg(data)
+
+def receive_messages(connectinfo, db):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(connectinfo)
+    with sock:
+        while True:
+            data, addr = sock.recvfrom(2**16)
+            db.rcvMsg(data)
+
+def build_server_info(server):
+    if server is None:
+        return "no data for server"
+    msg = "server: {}\n".format(server.uid) + \
+          "status: {}\n".format(server.status.name)
+    if server.mission is not None and \
+       server.mission.local_time is not None:
+        tleft = datetime.timedelta(seconds=server.mission.time_left)
+        period = datetime.timedelta(seconds=server.mission.restart_period)
+        msg += "mission: {}\n".format(server.mission.name)
+        msg += "theater: {}\n".format(server.mission.theater)
+        msg += time.strftime("local time: %Y-%m-%d %H:%M \n",
+                    server.mission.local_time)
+        msg += "restarts in: {}\n".format(tleft)
+        msg += "restart period: {}\n".format(period)
+    if server.players is not None:
+        msg += "players: {}/{}\n".format(len(server.players), 60)
+    return msg
+
+def build_server_list(ids):
+    if ids is None:
+        return "no known servers"
+    return '\nKnown Servers\n-------------\n' + '\n'.join(ids)
+
+def bot_setup(dcsserverdb):
+    description = '''DCT Discord Bot
+
+Pulls information from DCT enabled servers to report things such as server status and in the future stats.'''
+
+    bot = commands.Bot(command_prefix='!',
+            description=description,
+            case_insensitive=True)
+
+    @bot.event
+    async def on_ready():
+        print("discord bot ready")
+
+    @bot.group(
+        brief="Get information about a DCS server")
+    async def server(ctx):
+        if ctx.invoked_subcommand is None:
+            await ctx.send('Invalid command see usage...')
+
+    @server.command(name='list',
+        brief=" - list IDs of known servers",
+        usage="server list")
+    async def server_list(ctx):
+        await ctx.send(build_server_list(dcsserverdb.keys()))
+
+    @server.command(name='info',
+        brief=" - get info about a specific server",
+        usage="[id]")
+    async def server_info(ctx, server_id=None):
+        if server_id is None:
+            server_id = dcsserverdb.default
+        if server_id not in dcsserverdb:
+            await ctx.send("no info for server '{}'".format(server_id
+                or 'default'))
             return
+        await ctx.send(build_server_info(dcsserverdb[server_id]))
 
-        if message.content == '!help':
-            info = '``!Server Info`` - returns a summary of server information.``\n``!Time`` or ``!Mission Time`` - returns in-game time and time to next restart.\n ``!Status`` or ``!Server Status`` returns server status.\n``!Players`` or ``!List Players`` returns number of players online.\n``!Reset`` or ``!Restart`` returns time to next server reset.'
-            if info:
-                await message.channel.send(info)
+    return bot
 
-        if message.content == '!Time' or message.content == '!Mission Time':
-            info = checkTime()
-            if info:
-                await message.channel.send(info)
-                
 
-        if message.content == '!Status' or message.content ==  '!Server Status':
-            info = checkStatus()
-            if info:
-                await message.channel.send(info)
-
-        if message.content == '!Players' or message.content ==  '!List Players':
-            info = checkPlayers()
-            if info:
-                await message.channel.send(info)
-                
-        if message.content == "!Reset" or message.content == "!Restart":
-            info = checkRestart()
-            if info:
-                await message.channel.send(info)
-                
-        if message.content == '!Server Info' or message.content == '!Info':
-            info = checkInfo()
-            if info:
-                await message.channel.send(info)
-                
-    client.run(TOKEN)
+def main():
+    config = configparser.ConfigParser()
+    config.read_string(
+"""
+[DCS]
+address = localhost
+port = 8095
+heartbeat_timeout = 4
+"""
+    )
+    config.read('bot.cfg')
+    dcsserverdb = DCSServerDB()
+    bot = bot_setup(dcsserverdb)
+    server = threading.Thread(target=receive_messages,
+            args=((config['DCS']['address'], config.getint('DCS','port')),
+                    dcsserverdb))
+    server.start()
+    bot.run(config['discord']['token'])
 
 if __name__ == "__main__":
-    x = threading.Thread(target=thread_recieve, args=(),)
-    y = threading.Thread(target=thread_message, args=(),)
-    x.start()
-    y.start()
-
+    main()
