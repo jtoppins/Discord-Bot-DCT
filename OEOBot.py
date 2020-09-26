@@ -7,6 +7,8 @@ import threading
 import enum
 import socket
 import configparser
+import asyncio
+import discord
 from discord.ext import commands
 
 class DCSMsgType(enum.Enum):
@@ -107,7 +109,6 @@ class DCSServer:
 
 class DCSServerDB:
     def __init__(self):
-        self.lock    = threading.Lock()
         self.default = None
         self.servers = dict()
     def __getitem__(self, key):
@@ -117,17 +118,15 @@ class DCSServerDB:
     def keys(self):
         return self.servers.keys()
     def rcvMsg(self, msg):
-        with self.lock:
-            data = json.loads(msg)
-            if data['id'] in self.servers:
-                server = self.servers[data['id']]
-            else:
-                server = DCSServer(data['id'])
-                self.servers[data['id']] = server
-
-            if self.default is None:
-                self.default = server.uid
-            server.rcvMsg(data)
+        data = json.loads(msg)
+        if data['id'] in self.servers:
+            server = self.servers[data['id']]
+        else:
+            server = DCSServer(data['id'])
+            self.servers[data['id']] = server
+        if self.default is None:
+            self.default = server.uid
+        server.rcvMsg(data)
 
 def receive_messages(connectinfo, db):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -144,7 +143,7 @@ def build_server_info(server):
           "status: {}\n".format(server.status.name)
     if server.mission is not None and \
        server.mission.local_time is not None:
-        tleft = datetime.timedelta(seconds=server.mission.time_left)
+        tleft = datetime.timedelta(seconds=int(server.mission.time_left))
         period = datetime.timedelta(seconds=server.mission.restart_period)
         msg += "mission: {}\n".format(server.mission.name)
         msg += "theater: {}\n".format(server.mission.theater)
@@ -172,6 +171,7 @@ Pulls information from DCT enabled servers to report things such as server statu
 
     @bot.event
     async def on_ready():
+        await bot.change_presence(activity=discord.Game("starting"))
         print("discord bot ready")
 
     @bot.group(
@@ -218,6 +218,23 @@ heartbeat_timeout = 4
             args=((config['DCS']['address'], config.getint('DCS','port')),
                     dcsserverdb))
     server.start()
+    async def status_update(bot, db):
+        await bot.wait_until_ready()
+        while True:
+            if db.default is not None:
+                server = db[db.default]
+                msg = "{};".format(server.status.name)
+                if server.players is None or server.mission is None:
+                    msg += " P: 0/0; R: ??:??"
+                else:
+                    msg += " P: {}/{}; R: {}".format(
+                            len(server.players),
+                            60,
+                            datetime.timedelta(
+                                seconds=int(server.mission.time_left)))
+                await bot.change_presence(activity=discord.Game(msg))
+            await asyncio.sleep(10)
+    bot.loop.create_task(status_update(bot, dcsserverdb))
     bot.run(config['discord']['token'])
 
 if __name__ == "__main__":
