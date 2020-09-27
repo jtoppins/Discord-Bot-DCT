@@ -227,7 +227,8 @@ heartbeat_timeout = 4
             if db.default is not None:
                 server = db[db.default]
                 msg = "{};".format(server.status.name)
-                if server.players is None or server.mission is None:
+                if server.players is None or server.mission is None or \
+                    server.mission.time_left is None:
                     msg += " P: 0/0; R: ??:??"
                 else:
                     msg += " P: {}/{}; R: {}".format(
