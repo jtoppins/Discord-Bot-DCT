@@ -53,11 +53,14 @@ class MissionInfo:
     def addSlot(self, slot):
         self.slots[str(slot['unitId'])] = slot
 
+def seq_iter(obj):
+    return obj if isinstance(obj, dict) else range(len(obj))
+
 class Players:
     def __init__(self, players):
         self.players = dict()
-        for key, player in players.items():
-            self.players[player['ucid']] = player
+        for i in seq_iter(players):
+            self.players[players[i]['ucid']] = players[i]
 
     def __len__(self):
         return len(self.players)

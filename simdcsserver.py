@@ -138,6 +138,29 @@ server = {
             }
         }
     },
+    "players2": {
+        "ver":1,
+        "type":3,
+        "header":"DCSEXPORT",
+        "id":"78cce7cff12ed21baa6d159d6d9629bf",
+        "data": {
+            "eom":True,
+            "seqnum":24015,
+            "players": [
+                {
+                    "ping":0,
+                    "side":0,
+                    "id":1,
+                    "name":"VMFA-169 | Terrificfool",
+                    "pilotid":2117067,
+                    "ucid":"78cce7cff12ed21baa6d159d6d9629bf",
+                    "started":False,
+                    "lang":"en",
+                    "ipaddr":"97.102.255.236:10308"
+                }
+            ]
+        }
+    },
     "heartbeat2": {
         "ver":1,
         "type":1,
@@ -190,6 +213,7 @@ if __name__ == "__main__":
             ("slots", 2),
             ("players", 2),
             ("heartbeat2", 180),
+            ("players2", 2),
             ("heartbeat3", 60),
             ("stop", 0),
     ]
